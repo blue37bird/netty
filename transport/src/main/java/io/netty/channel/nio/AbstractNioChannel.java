@@ -458,6 +458,9 @@ public abstract class AbstractNioChannel extends AbstractChannel {
     @SuppressWarnings("unchecked")
     @Override
     protected void doRegister(ChannelPromise promise) {
+        // 将eventLoop()强制转换为IoEventLoop，这是Netty自定义的NIO事件循环实现
+        // 调用IoEventLoop.register()方法，将AbstractNioUnsafe实例（NIO操作的核心类）注册到事件循环
+        // 实际完成JDK NIO SelectableChannel到Selector的注册
         assert registration == null;
         ((IoEventLoop) eventLoop()).register((AbstractNioUnsafe) unsafe()).addListener(f -> {
             if (f.isSuccess()) {

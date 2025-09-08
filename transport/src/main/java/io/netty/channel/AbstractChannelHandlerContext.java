@@ -56,11 +56,22 @@ import static io.netty.channel.ChannelHandlerMask.MASK_USER_EVENT_TRIGGERED;
 import static io.netty.channel.ChannelHandlerMask.MASK_WRITE;
 import static io.netty.channel.ChannelHandlerMask.mask;
 
+/*
+* AbstractChannelHandlerContext 是事件在channelpipeline中传递的载体，控制事件传播的方向
+* 它封装了ChannelHandler和Channel的关联关系，
+* 并提供了事件传播的方法。
+*
+* 状态管理部分，比如handlerState，有ADD_PENDING、ADD_COMPLETE等状态，这些应该用于管理处理器的生命周期，
+* 确保handlerAdded和handlerRemoved的正确调用。
+*
+* 资源管理方面，代码中有ReferenceCountUtil.release(msg)和WriteTask使用Recycler，
+* 说明它负责释放资源和对象池管理，防止内存泄漏。
+* */
 abstract class AbstractChannelHandlerContext implements ChannelHandlerContext, ResourceLeakHint {
-
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(AbstractChannelHandlerContext.class);
-    volatile AbstractChannelHandlerContext next;
-    volatile AbstractChannelHandlerContext prev;
+    // 双向链表结构
+    volatile AbstractChannelHandlerContext next; // 下一个处理器上下文
+    volatile AbstractChannelHandlerContext prev;// 前一个处理器上下文
 
     private static final AtomicIntegerFieldUpdater<AbstractChannelHandlerContext> HANDLER_STATE_UPDATER =
             AtomicIntegerFieldUpdater.newUpdater(AbstractChannelHandlerContext.class, "handlerState");
@@ -81,16 +92,17 @@ abstract class AbstractChannelHandlerContext implements ChannelHandlerContext, R
      * Neither {@link ChannelHandler#handlerAdded(ChannelHandlerContext)}
      * nor {@link ChannelHandler#handlerRemoved(ChannelHandlerContext)} was called.
      */
+    // 状态管理（原子更新）
     private static final int INIT = 0;
 
-    private final DefaultChannelPipeline pipeline;
+    private final DefaultChannelPipeline pipeline;// 所属管道
     private final String name;
     private final boolean ordered;
-    private final int executionMask;
+    private final int executionMask;// 处理器类型掩码
 
     // Will be set to null if no child executor should be used, otherwise it will be set to the
     // child executor.
-    final EventExecutor childExecutor;
+    final EventExecutor childExecutor;// 子事件执行器
     // Cache the concrete value for the executor() method. This method is in the hot-path,
     // and it's a profitable optimisation to avoid as many dependent-loads as possible.
     // It does not need to be volatile, because it's always the same value for a given context,
@@ -203,15 +215,17 @@ abstract class AbstractChannelHandlerContext implements ChannelHandlerContext, R
         return this;
     }
 
+    // 示例：channelActive事件传播
     @Override
     public ChannelHandlerContext fireChannelActive() {
         AbstractChannelHandlerContext next = findContextInbound(MASK_CHANNEL_ACTIVE);
         if (next.executor().inEventLoop()) {
-            if (next.invokeHandler()) {
+            if (next.invokeHandler()) {// 检查处理器状态
                 try {
                     // DON'T CHANGE
                     // Duplex handlers implements both out/in interfaces causing a scalability issue
                     // see https://bugs.openjdk.org/browse/JDK-8180450
+                    // 多态调用处理器方法（HeadContext/自定义处理器）
                     final ChannelHandler handler = next.handler();
                     final DefaultChannelPipeline.HeadContext headContext = pipeline.head;
                     if (handler == headContext) {
@@ -225,7 +239,7 @@ abstract class AbstractChannelHandlerContext implements ChannelHandlerContext, R
                     next.invokeExceptionCaught(t);
                 }
             } else {
-                next.fireChannelActive();
+                next.fireChannelActive();// 继续传播
             }
         } else {
             next.executor().execute(this::fireChannelActive);
@@ -459,17 +473,21 @@ abstract class AbstractChannelHandlerContext implements ChannelHandlerContext, R
 
     @Override
     public ChannelFuture bind(final SocketAddress localAddress, final ChannelPromise promise) {
+        // 参数校验
         ObjectUtil.checkNotNull(localAddress, "localAddress");
-        if (isNotValidPromise(promise, false)) {
+        if (isNotValidPromise(promise, false)) {// 验证Promise有效性
             // cancelled
-            return promise;
+            return promise;// 已取消的Promise直接返回
         }
-
+        // 1. 查找下一个出站处理器上下文
         final AbstractChannelHandlerContext next = findContextOutbound(MASK_BIND);
         EventExecutor executor = next.executor();
+        // 2. 线程模型处理
         if (executor.inEventLoop()) {
+            // 直接在当前线程执行
             next.invokeBind(localAddress, promise);
         } else {
+            // 3. 跨线程任务提交
             safeExecute(executor, new Runnable() {
                 @Override
                 public void run() {
@@ -481,15 +499,16 @@ abstract class AbstractChannelHandlerContext implements ChannelHandlerContext, R
     }
 
     private void invokeBind(SocketAddress localAddress, ChannelPromise promise) {
-        if (invokeHandler()) {
+        if (invokeHandler()) { // 检查处理器状态
             try {
                 // DON'T CHANGE
                 // Duplex handlers implements both out/in interfaces causing a scalability issue
                 // see https://bugs.openjdk.org/browse/JDK-8180450
+                // 4. 多态调用处理器
                 final ChannelHandler handler = handler();
                 final DefaultChannelPipeline.HeadContext headContext = pipeline.head;
                 if (handler == headContext) {
-                    headContext.bind(this, localAddress, promise);
+                    headContext.bind(this, localAddress, promise);// HeadContext执行底层绑定
                 } else if (handler instanceof ChannelDuplexHandler) {
                     ((ChannelDuplexHandler) handler).bind(this, localAddress, promise);
                 } else if (handler instanceof ChannelOutboundHandlerAdapter) {
@@ -498,10 +517,11 @@ abstract class AbstractChannelHandlerContext implements ChannelHandlerContext, R
                     ((ChannelOutboundHandler) handler).bind(this, localAddress, promise);
                 }
             } catch (Throwable t) {
+                // 5. 异常处理
                 notifyOutboundHandlerException(t, promise);
             }
         } else {
-            bind(localAddress, promise);
+            bind(localAddress, promise);// 继续传播
         }
     }
 
@@ -992,11 +1012,12 @@ abstract class AbstractChannelHandlerContext implements ChannelHandlerContext, R
         assert updated; // This should always be true as it MUST be called before setAddComplete() or setRemoved().
     }
 
+    // 处理器生命周期控制
     final void callHandlerAdded() throws Exception {
         // We must call setAddComplete before calling handlerAdded. Otherwise if the handlerAdded method generates
         // any pipeline events ctx.handler() will miss them because the state will not allow it.
-        if (setAddComplete()) {
-            handler().handlerAdded(this);
+        if (setAddComplete()) {// CAS更新状态
+            handler().handlerAdded(this);// 回调处理器
         }
     }
 
@@ -1022,6 +1043,8 @@ abstract class AbstractChannelHandlerContext implements ChannelHandlerContext, R
      */
     boolean invokeHandler() {
         // Store in local variable to reduce volatile reads.
+        // handler状态校验
+        // handler状态流转：INIT → ADD_PENDING → ADD_COMPLETE → REMOVE_COMPLETE
         int handlerState = this.handlerState;
         return handlerState == ADD_COMPLETE || (!ordered && handlerState == ADD_PENDING);
     }

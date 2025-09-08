@@ -322,43 +322,47 @@ public abstract class AbstractChannel extends DefaultAttributeMap implements Cha
 
         @Override
         public final void register(EventLoop eventLoop, final ChannelPromise promise) {
+            // 参数校验
             ObjectUtil.checkNotNull(eventLoop, "eventLoop");
-            if (isRegistered()) {
+            if (isRegistered()) { // 检查是否已注册
                 promise.setFailure(new IllegalStateException("registered to an event loop already"));
                 return;
             }
-            if (!isCompatible(eventLoop)) {
+            if (!isCompatible(eventLoop)) {// 检查 EventLoop 类型兼容性
                 promise.setFailure(
                         new IllegalStateException("incompatible event loop type: " + eventLoop.getClass().getName()));
                 return;
             }
-
+            // 绑定 EventLoop 到当前 Channel
             AbstractChannel.this.eventLoop = eventLoop;
 
             // Clear any cached executors from prior event loop registrations.
+            // 清除 pipeline 中 handler 的线程缓存（防止之前注册过其他 EventLoop）
             AbstractChannelHandlerContext context = pipeline.tail;
             do {
                 context.contextExecutor = null;
                 context = context.prev;
             } while (context != null);
-
-            if (eventLoop.inEventLoop()) {
-                register0(promise);
-            } else {
+            // 线程安全注册逻辑
+            if (eventLoop.inEventLoop()) {// 当前线程是 EventLoop 线程
+                register0(promise);// 直接执行注册
+            } else { // 非 EventLoop 线程
                 try {
+                    // 将注册任务提交到 EventLoop 的任务队列
                     eventLoop.execute(new Runnable() {
+                        // 异步执行注册
                         @Override
                         public void run() {
                             register0(promise);
                         }
                     });
-                } catch (Throwable t) {
+                } catch (Throwable t) {// 任务提交失败处理
                     logger.warn(
                             "Force-closing a channel whose registration task was not accepted by an event loop: {}",
                             AbstractChannel.this, t);
                     closeForcibly();
                     closeFuture.setClosed();
-                    safeSetFailure(promise, t);
+                    safeSetFailure(promise, t); // 通知注册失败
                 }
             }
         }
@@ -366,26 +370,32 @@ public abstract class AbstractChannel extends DefaultAttributeMap implements Cha
         private void register0(ChannelPromise promise) {
             // check if the channel is still open as it could be closed in the mean time when the register
             // call was outside of the eventLoop
+            // 1. 检查Promise状态和Channel状态
             if (!promise.setUncancellable() || !ensureOpen(promise)) {
                 return;
             }
+            // 2. 创建注册Promise并添加监听器
             ChannelPromise registerPromise = newPromise();
             boolean firstRegistration = neverRegistered;
             registerPromise.addListener(new ChannelFutureListener() {
                 @Override
                 public void operationComplete(ChannelFuture future) throws Exception {
                     if (future.isSuccess()) {
+                        // 3. 注册成功处理
                         neverRegistered = false;
                         registered = true;
 
                         // Ensure we call handlerAdded(...) before we actually notify the promise. This is needed as the
                         // user may already fire events through the pipeline in the ChannelFutureListener.
+                        // 4. 触发handlerAdded事件
                         pipeline.invokeHandlerAddedIfNeeded();
-
+                        // 5. 通知原始Promise成功
                         safeSetSuccess(promise);
+                        // 6. 触发ChannelRegistered事件
                         pipeline.fireChannelRegistered();
                         // Only fire a channelActive if the channel has never been registered. This prevents firing
                         // multiple channel actives if the channel is deregistered and re-registered.
+                        // 7. 处理首次注册的激活状态
                         if (isActive()) {
                             if (firstRegistration) {
                                 pipeline.fireChannelActive();
@@ -399,12 +409,14 @@ public abstract class AbstractChannel extends DefaultAttributeMap implements Cha
                         }
                     } else {
                         // Close the channel directly to avoid FD leak.
+                        // 8. 注册失败处理
                         closeForcibly();
                         closeFuture.setClosed();
                         safeSetFailure(promise, future.cause());
                     }
                 }
             });
+            // 9. 执行实际注册操作（由子类实现）
             doRegister(registerPromise);
         }
 

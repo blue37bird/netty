@@ -162,6 +162,21 @@ import java.util.concurrent.TimeUnit;
  * }
  * </pre>
  */
+/*
+*
+ChannelFuture 是 Netty 中用于处理异步 I/O 操作结果的核心接口，它提供了一种非阻塞的方式来处理异步操作的完成状态和结果。
+异步操作状态跟踪
+    表示 Channel 的异步 I/O 操作结果（如连接建立、数据写入等）
+    提供操作完成状态查询：isDone()、isSuccess()、isCancelled()
+    通过状态图管理操作生命周期（未完成 -> 成功/失败/取消）
+异步结果处理机制
+    ChannelFuture addListener(GenericFutureListener<? extends Future<? super Void>> listener);
+    支持添加监听器（推荐方式），在操作完成时触发回调
+    提供阻塞等待方法：sync()/await()（需谨慎使用）
+与 Channel 的关联Channel channel();
+    通过 channel() 方法获取关联的 Channel 实例
+    所有操作都绑定到具体的 Channel
+* */
 public interface ChannelFuture extends Future<Void> {
 
     /**

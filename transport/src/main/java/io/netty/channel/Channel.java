@@ -299,6 +299,7 @@ public interface Channel extends AttributeMap, ChannelOutboundInvoker, Comparabl
 
     @Override
     default ChannelFuture bind(SocketAddress localAddress, ChannelPromise promise) {
+        // pipeline()返回 DefaultChannelPipeline
         return pipeline().bind(localAddress, promise);
     }
 

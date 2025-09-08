@@ -57,15 +57,20 @@ public abstract class AbstractBootstrap<B extends AbstractBootstrap<B, C>, C ext
     @SuppressWarnings("unchecked")
     private static final Map.Entry<AttributeKey<?>, Object>[] EMPTY_ATTRIBUTE_ARRAY = new Map.Entry[0];
 
+    // 事件循环组
     volatile EventLoopGroup group;
+    // 通道工厂
     @SuppressWarnings("deprecation")
     private volatile ChannelFactory<? extends C> channelFactory;
     private volatile SocketAddress localAddress;
 
     // The order in which ChannelOptions are applied is important they may depend on each other for validation
     // purposes.
+    // 通道选项
     private final Map<ChannelOption<?>, Object> options = new LinkedHashMap<ChannelOption<?>, Object>();
+    // 通道属性
     private final Map<AttributeKey<?>, Object> attrs = new ConcurrentHashMap<AttributeKey<?>, Object>();
+    // 通道处理器
     private volatile ChannelHandler handler;
     private volatile ClassLoader extensionsClassLoader;
 
@@ -285,21 +290,23 @@ public abstract class AbstractBootstrap<B extends AbstractBootstrap<B, C>, C ext
     }
 
     private ChannelFuture doBind(final SocketAddress localAddress) {
-        final ChannelFuture regFuture = initAndRegister();
+        final ChannelFuture regFuture = initAndRegister(); // 1. 初始化并注册Channel
         final Channel channel = regFuture.channel();
-        if (regFuture.cause() != null) {
+        if (regFuture.cause() != null) {// 2. 异常检查
             return regFuture;
         }
 
-        if (regFuture.isDone()) {
+        if (regFuture.isDone()) {// 3. 注册已完成
             // At this point we know that the registration was complete and successful.
+            // ChannelPromise 是 ChannelFuture 的子接口，表示一个可写的异步操作结果容器。
+            // 这里创建的是用于跟踪后续 bind 操作结果的容器。
             ChannelPromise promise = channel.newPromise();
-            doBind0(regFuture, channel, localAddress, promise);
+            doBind0(regFuture, channel, localAddress, promise);// 立即执行绑定
             return promise;
-        } else {
+        } else {// 4. 注册未完成
             // Registration future is almost always fulfilled already, but just in case it's not.
             final PendingRegistrationPromise promise = new PendingRegistrationPromise(channel);
-            regFuture.addListener(new ChannelFutureListener() {
+            regFuture.addListener(new ChannelFutureListener() { // 添加监听器
                 @Override
                 public void operationComplete(ChannelFuture future) throws Exception {
                     Throwable cause = future.cause();
@@ -311,7 +318,7 @@ public abstract class AbstractBootstrap<B extends AbstractBootstrap<B, C>, C ext
                         // Registration was successful, so set the correct executor to use.
                         // See https://github.com/netty/netty/issues/2586
                         promise.registered();
-
+                        // 注册完成后执行绑定
                         doBind0(regFuture, channel, localAddress, promise);
                     }
                 }
@@ -320,27 +327,37 @@ public abstract class AbstractBootstrap<B extends AbstractBootstrap<B, C>, C ext
         }
     }
 
+    /**
+     * 初始化并注册 Channel 的核心方法
+     */
     final ChannelFuture initAndRegister() {
         Channel channel = null;
         try {
+            // 通过Channel工厂创建新的Channel实例
             channel = channelFactory.newChannel();
+            // 初始化Channel（设置pipeline、handler等）
             init(channel);
         } catch (Throwable t) {
+            // 异常处理：当Channel创建或初始化失败时
             if (channel != null) {
-                // channel can be null if newChannel crashed (eg SocketException("too many open files"))
+                // 强制关闭未成功注册的Channel
                 channel.unsafe().closeForcibly();
-                // as the Channel is not registered yet we need to force the usage of the GlobalEventExecutor
+                // 返回带有失败状态的ChannelPromise（使用全局事件执行器）
                 return new DefaultChannelPromise(channel, GlobalEventExecutor.INSTANCE).setFailure(t);
             }
-            // as the Channel is not registered yet we need to force the usage of the GlobalEventExecutor
+            // 当Channel完全未创建时（如文件描述符不足），返回失败的特殊Channel
             return new DefaultChannelPromise(new FailedChannel(), GlobalEventExecutor.INSTANCE).setFailure(t);
         }
-
+        // 注册Channel到EventLoop
+        // config().group()() 返回 EventLoopGroup，即 Channel 的 EventLoop
         final ChannelFuture regFuture = config().group().register(channel);
+        // 注册失败处理
         if (regFuture.cause() != null) {
             if (channel.isRegistered()) {
+                // 已注册的Channel正常关闭
                 channel.close();
             } else {
+                // 未成功注册的Channel强制关闭
                 channel.unsafe().closeForcibly();
             }
         }
@@ -353,7 +370,9 @@ public abstract class AbstractBootstrap<B extends AbstractBootstrap<B, C>, C ext
         //    i.e. It's safe to attempt bind() or connect() now:
         //         because bind() or connect() will be executed *after* the scheduled registration task is executed
         //         because register(), bind(), and connect() are all bound to the same thread.
-
+        // 返回注册结果Future，此时可能有两种情况：
+        // 1. 已在事件循环线程中完成注册
+        // 2. 注册任务已加入事件循环的任务队列等待执行
         return regFuture;
     }
 
@@ -367,18 +386,28 @@ public abstract class AbstractBootstrap<B extends AbstractBootstrap<B, C>, C ext
         return ChannelInitializerExtensions.getExtensions().extensions(loader);
     }
 
+    /*
+    * regFuture 通道注册的异步结果
+    * channel  要绑定的通道实例
+    * localAddress  绑定的本地地址
+    * promise  绑定操作的Promise
+    * */
     private static void doBind0(
             final ChannelFuture regFuture, final Channel channel,
             final SocketAddress localAddress, final ChannelPromise promise) {
 
         // This method is invoked before channelRegistered() is triggered.  Give user handlers a chance to set up
         // the pipeline in its channelRegistered() implementation.
+        // 1. 确保在EventLoop线程执行绑定操作
         channel.eventLoop().execute(new Runnable() {
             @Override
             public void run() {
                 if (regFuture.isSuccess()) {
+                    // 2. 注册成功后的实际绑定操作
+                    // 3. 添加失败关闭监听器
                     channel.bind(localAddress, promise).addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
                 } else {
+
                     promise.setFailure(regFuture.cause());
                 }
             }

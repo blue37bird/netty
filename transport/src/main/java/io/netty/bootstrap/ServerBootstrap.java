@@ -133,29 +133,40 @@ public class ServerBootstrap extends AbstractBootstrap<ServerBootstrap, ServerCh
 
     @Override
     void init(Channel channel) {
+        // 设置服务端Channel的选项（SO_BACKLOG等）
         setChannelOptions(channel, newOptionsArray(), logger);
+        // 设置服务端Channel的属性（自定义元数据）
         setAttributes(channel, newAttributesArray());
-
+        // 获取服务端Channel的pipeline
         ChannelPipeline p = channel.pipeline();
 
+        // 准备子Channel配置参数（从ServerBootstrap配置中获取）
         final EventLoopGroup currentChildGroup = childGroup;
         final ChannelHandler currentChildHandler = childHandler;
         final Entry<ChannelOption<?>, Object>[] currentChildOptions = newOptionsArray(childOptions);
         final Entry<AttributeKey<?>, Object>[] currentChildAttrs = newAttributesArray(childAttrs);
+        // 获取Channel初始化扩展（用于插件机制）
         final Collection<ChannelInitializerExtension> extensions = getInitializerExtensions();
 
+        // 向pipeline添加初始化处理器
         p.addLast(new ChannelInitializer<Channel>() {
+            // ChannelInitializer的initChannel方法是在Channel注册到EventLoop时被调用的。
+            // 当Channel被注册后，EventLoop会处理它的初始化和后续事件。
             @Override
             public void initChannel(final Channel ch) {
                 final ChannelPipeline pipeline = ch.pipeline();
+                // 获取主handler（通过config()配置的handler）
                 ChannelHandler handler = config.handler();
                 if (handler != null) {
+                    // 将主handler添加到pipeline
                     pipeline.addLast(handler);
                 }
 
+                // 在EventLoop线程中异步添加连接接收器
                 ch.eventLoop().execute(new Runnable() {
                     @Override
                     public void run() {
+                        // 添加ServerBootstrapAcceptor用于处理新连接
                         pipeline.addLast(new ServerBootstrapAcceptor(
                                 ch, currentChildGroup, currentChildHandler, currentChildOptions, currentChildAttrs,
                                 extensions));
@@ -163,10 +174,12 @@ public class ServerBootstrap extends AbstractBootstrap<ServerBootstrap, ServerCh
                 });
             }
         });
+        // 处理Channel初始化扩展（针对服务端监听Channel）
         if (!extensions.isEmpty() && channel instanceof ServerChannel) {
             ServerChannel serverChannel = (ServerChannel) channel;
             for (ChannelInitializerExtension extension : extensions) {
                 try {
+                    // 执行扩展的后初始化方法
                     extension.postInitializeServerListenerChannel(serverChannel);
                 } catch (Exception e) {
                     logger.warn("Exception thrown from postInitializeServerListenerChannel", e);
@@ -223,13 +236,16 @@ public class ServerBootstrap extends AbstractBootstrap<ServerBootstrap, ServerCh
         @Override
         @SuppressWarnings("unchecked")
         public void channelRead(ChannelHandlerContext ctx, Object msg) {
-            final Channel child = (Channel) msg;
+            final Channel child = (Channel) msg;// 1. 获取新连接Channel
 
+            // 2. 初始化子Channel
+            // 添加用户配置的childH
             child.pipeline().addLast(childHandler);
-
+            // 设置子Channel选项
             setChannelOptions(child, childOptions, logger);
+            // 设置子Channel属性
             setAttributes(child, childAttrs);
-
+            // 3. 执行扩展初始化（如果有）
             if (!extensions.isEmpty()) {
                 for (ChannelInitializerExtension extension : extensions) {
                     try {
@@ -241,16 +257,17 @@ public class ServerBootstrap extends AbstractBootstrap<ServerBootstrap, ServerCh
             }
 
             try {
+                // 4. 注册子Channel到worker线程组
                 childGroup.register(child).addListener(new ChannelFutureListener() {
                     @Override
                     public void operationComplete(ChannelFuture future) throws Exception {
                         if (!future.isSuccess()) {
-                            forceClose(child, future.cause());
+                            forceClose(child, future.cause());// 注册失败处理
                         }
                     }
                 });
             } catch (Throwable t) {
-                forceClose(child, t);
+                forceClose(child, t);// 异常处理
             }
         }
 

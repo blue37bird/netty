@@ -315,6 +315,13 @@ public final class NioIoHandler implements IoHandler {
         throw new IllegalArgumentException("IoOps of type " + StringUtil.simpleClassName(ops) + " not supported");
     }
 
+    /*
+    * DefaultNioRegistration
+    *  * 用于包装NioIoHandle，实现IoRegistration接口
+    *  * 维护SelectionKey生命周期
+    *  * 处理interestOps更新
+    *  * 取消注册时自动清理资源
+    * */
     final class DefaultNioRegistration implements IoRegistration {
         private final AtomicBoolean canceled = new AtomicBoolean();
         private final NioIoHandle handle;
@@ -323,6 +330,8 @@ public final class NioIoHandler implements IoHandler {
         DefaultNioRegistration(ThreadAwareExecutor executor, NioIoHandle handle, NioIoOps initialOps, Selector selector)
                 throws IOException {
             this.handle = handle;
+            // 底层实际调用JDK NIO的SelectableChannel.register()
+            // 封装JDK原生API的异常处理
             key = handle.selectableChannel().register(selector, initialOps.value, this);
         }
 
@@ -385,14 +394,19 @@ public final class NioIoHandler implements IoHandler {
     @Override
     public IoRegistration register(IoHandle handle)
             throws Exception {
-        NioIoHandle nioHandle = nioHandle(handle);
+        // 通过nioHandle(handle)确保传入的handle是NioIoHandle实例
+        NioIoHandle nioHandle = nioHandle(handle);// 类型检查与转换
         NioIoOps ops = NioIoOps.NONE;
         boolean selected = false;
         for (;;) {
             try {
+                // 核心注册操作
                 return new DefaultNioRegistration(executor, nioHandle, ops, unwrappedSelector());
             } catch (CancelledKeyException e) {
+                // 使用无限循环处理CancelledKeyException
                 if (!selected) {
+                    // 首次异常时通过selectNow()强制更新Selector状态
+                    // 强制刷新Selector状态
                     // Force the Selector to select now as the "canceled" SelectionKey may still be
                     // cached and not removed because no Select.select(..) operation was called yet.
                     selectNow();
@@ -400,6 +414,7 @@ public final class NioIoHandler implements IoHandler {
                 } else {
                     // We forced a select operation on the selector before but the SelectionKey is still cached
                     // for whatever reason. JDK bug ?
+                    // 重试后仍失败则抛出异常
                     throw e;
                 }
             }

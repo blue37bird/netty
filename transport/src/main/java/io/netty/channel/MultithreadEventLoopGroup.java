@@ -83,6 +83,12 @@ public abstract class MultithreadEventLoopGroup extends MultithreadEventExecutor
 
     @Override
     public ChannelFuture register(Channel channel) {
+        // next() 方法返回下一个 EventLoop，通常是 RoundRobin 策略
+        // 从线程组中选择一个EventLoop来注册Channel。
+        // 线程选择机制:
+        //使用 EventExecutorChooserFactory 实现负载均衡
+        //默认采用轮询策略（Round-Robin）分配 EventLoop
+        //优化实现：当线程数是 2 的幂时使用位运算，否则取模运算
         return next().register(channel);
     }
 

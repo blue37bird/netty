@@ -991,6 +991,12 @@ public class DefaultChannelPipeline implements ChannelPipeline {
 
     @Override
     public final ChannelFuture bind(SocketAddress localAddress, ChannelPromise promise) {
+        // 当调用pipeline.bind()时，事件从tail开始传播
+        // 依次经过所有ChannelOutboundHandler
+        // 最终到达head执行真正的绑定操作（调用JDK底层API）
+        // 保证所有出站处理器都能拦截处理bind操作
+        // 保持事件传播方向的一致性（入站从头到尾，出站从尾到头）
+        // 用户添加的最后一个出站处理器会最先执行
         return tail.bind(localAddress, promise);
     }
 

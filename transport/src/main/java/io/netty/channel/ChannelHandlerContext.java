@@ -89,11 +89,13 @@ public interface ChannelHandlerContext extends AttributeMap, ChannelInboundInvok
     /**
      * Return the {@link Channel} which is bound to the {@link ChannelHandlerContext}.
      */
+    // 获取绑定的Channel实例
     Channel channel();
 
     /**
      * Returns the {@link EventExecutor} which is used to execute an arbitrary task.
      */
+    // 获取关联的EventExecutor
     EventExecutor executor();
 
     /**
@@ -101,11 +103,13 @@ public interface ChannelHandlerContext extends AttributeMap, ChannelInboundInvok
      * was added to the {@link ChannelPipeline}. This name can also be used to access the registered
      * {@link ChannelHandler} from the {@link ChannelPipeline}.
      */
+    // 获取在Pipeline中的唯一名称
     String name();
 
     /**
      * The {@link ChannelHandler} that is bound this {@link ChannelHandlerContext}.
      */
+    // 获取关联的ChannelHandler实例
     ChannelHandler handler();
 
     /**
@@ -121,18 +125,21 @@ public interface ChannelHandlerContext extends AttributeMap, ChannelInboundInvok
     @Override
     ChannelHandlerContext fireChannelUnregistered();
 
+    // 传播通道激活事件
     @Override
     ChannelHandlerContext fireChannelActive();
 
     @Override
     ChannelHandlerContext fireChannelInactive();
 
+    // 传播异常事件
     @Override
     ChannelHandlerContext fireExceptionCaught(Throwable cause);
 
     @Override
     ChannelHandlerContext fireUserEventTriggered(Object evt);
 
+    // 传播数据读取事件
     @Override
     ChannelHandlerContext fireChannelRead(Object msg);
 
@@ -142,20 +149,24 @@ public interface ChannelHandlerContext extends AttributeMap, ChannelInboundInvok
     @Override
     ChannelHandlerContext fireChannelWritabilityChanged();
 
+    // 触发读取操作（用于调整读取状态）
     @Override
     ChannelHandlerContext read();
 
+    // 立即刷新输出缓冲区
     @Override
     ChannelHandlerContext flush();
 
     /**
      * Return the assigned {@link ChannelPipeline}
      */
+    // 获取所属的ChannelPipeline
     ChannelPipeline pipeline();
 
     /**
      * Return the assigned {@link ByteBufAllocator} which will be used to allocate {@link ByteBuf}s.
      */
+    // 获取ByteBuf分配器（关键内存管理接口）
     ByteBufAllocator alloc();
 
     /**

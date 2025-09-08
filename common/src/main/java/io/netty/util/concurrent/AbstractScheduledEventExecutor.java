@@ -183,6 +183,7 @@ public abstract class AbstractScheduledEventExecutor extends AbstractEventExecut
      * @param taskQueue the task queue into which the fetched scheduled tasks should be transferred.
      * @return {@code true} if we were able to transfer everything, {@code false} if we need to call this method again
      *         as soon as there is space again in {@code taskQueue}.
+     * 负责将到期的定时任务从专用队列转移到主任务队列
      */
     protected boolean fetchFromScheduledTaskQueue(Queue<Runnable> taskQueue) {
         assert inEventLoop();
@@ -197,6 +198,7 @@ public abstract class AbstractScheduledEventExecutor extends AbstractEventExecut
                 return true;
             }
             if (!taskQueue.offer(scheduledTask)) {
+                // 主队列已满时回退到定时队列
                 // No space left in the task queue add it back to the scheduledTaskQueue so we pick it up again.
                 scheduledTaskQueue.add((ScheduledFutureTask<?>) scheduledTask);
                 return false;
