@@ -246,14 +246,10 @@ public abstract class SingleThreadEventExecutor extends AbstractScheduledEventEx
     }
 
     /**
-     * Create a new {@link Queue} which will holds the tasks to execute. This default implementation will return a
-     * {@link LinkedBlockingQueue} but if your sub-class of {@link SingleThreadEventExecutor} will not do any blocking
-     * calls on the this {@link Queue} it may make sense to {@code @Override} this and return some more performant
-     * implementation that does not support blocking operations at all.
+     * 默认使用LinkedBlockingQueue
+     * 可被子类重写为MPSC队列
      */
     protected Queue<Runnable> newTaskQueue(int maxPendingTasks) {
-        // 默认使用LinkedBlockingQueue
-        // 可被子类重写为MPSC队列
         return new LinkedBlockingQueue<Runnable>(maxPendingTasks);
     }
 
@@ -524,34 +520,38 @@ public abstract class SingleThreadEventExecutor extends AbstractScheduledEventEx
     }
 
     /**
-     * Poll all tasks from the task queue and run them via {@link Runnable#run()} method.  This method stops running
-     * the tasks in the task queue and returns if it ran longer than {@code timeoutNanos}.
+     * 处理非IO任务
      */
     protected boolean runAllTasks(long timeoutNanos) {
+        // 将到期的定时任务从专用队列转移到主任务队列
         fetchFromScheduledTaskQueue(taskQueue);
+        // 获取任务
         Runnable task = pollTask();
         if (task == null) {
+            // 没有任务
+            // 钩子方法，执行后置处理
             afterRunningAllTasks();
             return false;
         }
 
+        // deadline为允许执行非IO任务的最大时间限制
         final long deadline = timeoutNanos > 0 ? getCurrentTimeNanos() + timeoutNanos : 0;
         long runTasks = 0;
         long lastExecutionTime;
         for (;;) {
+            // 执行任务
             safeExecute(task);
 
             runTasks ++;
 
-            // Check timeout every 64 tasks because nanoTime() is relatively expensive.
-            // XXX: Hard-coded value - will make it configurable if it is really a problem.
+            // 每64个非IO任务检查一次
             if ((runTasks & 0x3F) == 0) {
                 lastExecutionTime = getCurrentTimeNanos();
                 if (lastExecutionTime >= deadline) {
                     break;
                 }
             }
-
+            // 继续获取
             task = pollTask();
             if (task == null) {
                 lastExecutionTime = getCurrentTimeNanos();
@@ -802,6 +802,7 @@ public abstract class SingleThreadEventExecutor extends AbstractScheduledEventEx
      * Returns {@code true} if this {@link SingleThreadEventExecutor} can be suspended at the moment, {@code false}
      * otherwise.
      *
+     * 是否暂停
      * @return  if suspension is possible at the moment.
      */
     protected boolean canSuspend() {
@@ -827,6 +828,9 @@ public abstract class SingleThreadEventExecutor extends AbstractScheduledEventEx
      * Confirm that the shutdown if the instance should be done now!
      */
     /*
+    *
+    *
+    * 确认关闭
     * 具体来说，confirmShutdown方法会：
       1. 检查事件循环是否已经处于关闭状态（SHUTDOWN或更高状态）。
       2. 如果还没有执行过shutdownHooks，则执行它们（只执行一次）。

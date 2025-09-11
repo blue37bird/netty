@@ -36,6 +36,9 @@ public abstract class SingleThreadEventLoop extends SingleThreadEventExecutor im
     protected static final int DEFAULT_MAX_PENDING_TASKS = Math.max(16,
             SystemPropertyUtil.getInt("io.netty.eventLoop.maxPendingTasks", Integer.MAX_VALUE));
 
+    // tailTasks是用于存放事件循环迭代后置任务的特殊队列。
+    // 执行时机:在每次事件循环完成常规任务（普通任务+定时任务）后立即执行
+    // 一般用于资源的清理工作，比如释放内存等。
     private final Queue<Runnable> tailTasks;
 
     protected SingleThreadEventLoop(EventLoopGroup parent, ThreadFactory threadFactory, boolean addTaskWakesUp) {
@@ -110,6 +113,7 @@ public abstract class SingleThreadEventLoop extends SingleThreadEventExecutor im
 
     @Override
     public ChannelFuture register(Channel channel) {
+        // 创建DefaultChannelPromise，用于记录注册结果
         return register(new DefaultChannelPromise(channel, this));
     }
 
@@ -137,7 +141,7 @@ public abstract class SingleThreadEventLoop extends SingleThreadEventExecutor im
     }
 
     /**
-     * Adds a task to be run once at the end of next (or current) {@code eventloop} iteration.
+     * 添加任务到tailTasks
      *
      * @param task to be added.
      */
@@ -148,6 +152,7 @@ public abstract class SingleThreadEventLoop extends SingleThreadEventExecutor im
         }
 
         if (!tailTasks.offer(task)) {
+            // 队列满时拒绝
             reject(task);
         }
 
@@ -169,6 +174,7 @@ public abstract class SingleThreadEventLoop extends SingleThreadEventExecutor im
 
     @Override
     protected void afterRunningAllTasks() {
+        //  1. 执行所有已提交的任务
         runAllTasksFrom(tailTasks);
     }
 

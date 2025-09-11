@@ -20,6 +20,9 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Default implementation which uses simple round-robin to choose next {@link EventExecutor}.
+ * Netty中的EventLoopGroup管理多个EventExecutor，也就是事件循环线程。
+ * 当有新的Channel注册时，需要选择一个EventExecutor来处理这个Channel的IO事件。
+ *
  */
 public final class DefaultEventExecutorChooserFactory implements EventExecutorChooserFactory {
 
@@ -27,8 +30,12 @@ public final class DefaultEventExecutorChooserFactory implements EventExecutorCh
 
     private DefaultEventExecutorChooserFactory() { }
 
+    /*
+    * 用来创建选择器
+    * */
     @Override
     public EventExecutorChooser newChooser(EventExecutor[] executors) {
+        // 判断是否为2的幂次方数
         if (isPowerOfTwo(executors.length)) {
             return new PowerOfTwoEventExecutorChooser(executors);
         } else {
@@ -37,6 +44,7 @@ public final class DefaultEventExecutorChooserFactory implements EventExecutorCh
     }
 
     private static boolean isPowerOfTwo(int val) {
+        // 2的幂次方判断技巧：利用补码特性
         return (val & -val) == val;
     }
 
@@ -50,14 +58,18 @@ public final class DefaultEventExecutorChooserFactory implements EventExecutorCh
 
         @Override
         public EventExecutor next() {
+            // & executors.length -1 等价于 % executors.length，但是效率更高
             return executors[idx.getAndIncrement() & executors.length - 1];
         }
     }
 
+    // 通用选择器
     private static final class GenericEventExecutorChooser implements EventExecutorChooser {
         // Use a 'long' counter to avoid non-round-robin behaviour at the 32-bit overflow boundary.
         // The 64-bit long solves this by placing the overflow so far into the future, that no system
         // will encounter this in practice.
+        // 使用long避免整数溢出
+        // 通过AtomicInteger/AtomicLong实现无锁化递增，保证多线程下的正确性
         private final AtomicLong idx = new AtomicLong();
         private final EventExecutor[] executors;
 
@@ -67,6 +79,8 @@ public final class DefaultEventExecutorChooserFactory implements EventExecutorCh
 
         @Override
         public EventExecutor next() {
+            // 绝对值取模保证非负索引
+            // idx.getAndIncrement()() 无锁化递增，避免阻塞
             return executors[(int) Math.abs(idx.getAndIncrement() % executors.length)];
         }
     }

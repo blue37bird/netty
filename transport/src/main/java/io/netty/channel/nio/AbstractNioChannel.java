@@ -422,8 +422,7 @@ public abstract class AbstractNioChannel extends AbstractChannel {
             try {
                 NioIoEvent nioEvent = (NioIoEvent) event;
                 NioIoOps nioReadyOps = nioEvent.ops();
-                // We first need to call finishConnect() before try to trigger a read(...) or write(...) as otherwise
-                // the NIO JDK channel implementation may throw a NotYetConnectedException.
+                // 完成TCP连接建立
                 if (nioReadyOps.contains(NioIoOps.CONNECT)) {
                     // remove OP_CONNECT as otherwise Selector.select(..) will always return without blocking
                     // See https://github.com/netty/netty/issues/924
@@ -432,15 +431,14 @@ public abstract class AbstractNioChannel extends AbstractChannel {
                     unsafe().finishConnect();
                 }
 
-                // Process OP_WRITE first as we may be able to write some queued buffers and so free memory.
+                // 刷新发送缓冲区数据
                 if (nioReadyOps.contains(NioIoOps.WRITE)) {
                     // Call forceFlush which will also take care of clear the OP_WRITE once there is nothing left to
                     // write
                     forceFlush();
                 }
 
-                // Also check for readOps of 0 to workaround possible JDK bug which may otherwise lead
-                // to a spin loop
+                // 读取数据或接受新连接
                 if (nioReadyOps.contains(NioIoOps.READ_AND_ACCEPT) || nioReadyOps.equals(NioIoOps.NONE)) {
                     read();
                 }

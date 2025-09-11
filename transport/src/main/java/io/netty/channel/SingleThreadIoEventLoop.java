@@ -46,11 +46,11 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class SingleThreadIoEventLoop extends SingleThreadEventLoop implements IoEventLoop {
 
-    // TODO: Is this a sensible default ?
-    // 最大任务处理时间（防止任务处理饥饿IO操作）
+    // 默认最大任务处理时间
     private static final long DEFAULT_MAX_TASK_PROCESSING_QUANTUM_NS = TimeUnit.MILLISECONDS.toNanos(Math.max(100,
             SystemPropertyUtil.getInt("io.netty.eventLoop.maxTaskProcessingQuantumMs", 1000)));
 
+    // 最大任务处理时间（防止任务处理饥饿IO操作）
     private final long maxTaskProcessingQuantumNs;
 
     // IO处理器上下文（提供线程安全的状态访问）
@@ -207,7 +207,7 @@ public class SingleThreadIoEventLoop extends SingleThreadEventLoop implements Io
     }
 
     /**
-     * 核心事件循环逻辑
+     * 事件循环
      *
      * 执行流程：
      * 1. 初始化IO处理器
@@ -230,11 +230,9 @@ public class SingleThreadIoEventLoop extends SingleThreadEventLoop implements Io
             if (isShuttingDown()) {// 检查关闭状态
                 ioHandler.prepareToDestroy();// 准备销毁IO资源
             }
-            // Now run all tasks for the maximum configured amount of time before trying to run IO again.
             // 处理异步任务（带时间限制）
             runAllTasks(maxTaskProcessingQuantumNs);
 
-            // We should continue with our loop until we either confirmed a shutdown or we can suspend it.
             // confirmShutdown方法返回true表示已经完成关闭，可以退出循环；返回false表示还需要继续处理（可能还有任务没执行完，或者还需要执行其他关闭步骤）。
             // canSuspend 是事件循环生命周期管理的安全阀，确保仅在无活跃IO连接时挂起线程，防止资源泄漏和状态不一致问题。
         } while (!confirmShutdown() && !canSuspend());
@@ -296,6 +294,9 @@ public class SingleThreadIoEventLoop extends SingleThreadEventLoop implements Io
         promise.setSuccess(new IoRegistrationWrapper(registration));
     }
 
+    /*
+    * 唤醒
+    * */
     @Override
     protected final void wakeup(boolean inEventLoop) {
         ioHandler.wakeup();
@@ -307,6 +308,9 @@ public class SingleThreadIoEventLoop extends SingleThreadEventLoop implements Io
         ioHandler.destroy();
     }
 
+    /*
+    * 验证当前事件循环是否支持特定类型的IO句柄
+    * */
     @Override
     public boolean isCompatible(Class<? extends IoHandle> handleType) {
         return ioHandler.isCompatible(handleType);
@@ -322,6 +326,10 @@ public class SingleThreadIoEventLoop extends SingleThreadEventLoop implements Io
         return newTaskQueue0(maxPendingTasks);
     }
 
+    /*
+    * 多生产者单消费者MPSC队列基于CAS实现，避免锁竞争，性能比LinkedBlockingQueue高约5-10倍
+    * 使用数组实现环形缓冲区，减少GC压力
+    * */
     protected static Queue<Runnable> newTaskQueue0(int maxPendingTasks) {
         // This event loop never calls takeTask()
         return maxPendingTasks == Integer.MAX_VALUE ? PlatformDependent.<Runnable>newMpscQueue()

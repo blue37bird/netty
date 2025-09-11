@@ -95,11 +95,20 @@ public final class NioIoHandler implements IoHandler {
 
     /**
      * The NIO {@link Selector}.
+     * 在Java NIO中，Selector可以检测多个Channel上的事件（如连接就绪、读就绪、写就绪）。这样，一个线程就可以轮询多个Channel，
+     * 而不需要为每个Channel都创建一个线程。这种机制在高并发应用中非常有用，因为它可以显著减少线程上下文切换的开销。
      */
     private Selector selector;
+    // 原始的Selector，用于处理原生Selector的selectedKeys集合。
     private Selector unwrappedSelector;
+    // 用于替换Selector内部selectedKeys和publicSelectedKeys的集合（优化用）
     private SelectedSelectionKeySet selectedKeys;
 
+    // SelectorProvider
+    // 用于创建选择器(Selector)、通道(SocketChannel, ServerSocketChannel)等。
+    // 在Netty中，通过使用SelectorProvider，
+    // 可以确保在不同的操作系统上使用合适的底层实现
+    // （例如，在Windows上使用WindowsSelectorProvider，在Linux上使用EPollSelectorProvider等）。
     private final SelectorProvider provider;
 
     /**
@@ -107,12 +116,18 @@ public final class NioIoHandler implements IoHandler {
      * break out of its selection process. In our case we use a timeout for
      * the select method and the select method will block for that time unless
      * waken up.
+     *
+     * 用于控制Selector.select的超时唤醒
      */
     private final AtomicBoolean wakenUp = new AtomicBoolean();
 
+    // 选择策略
     private final SelectStrategy selectStrategy;
+    // 线程感知的执行器
     private final ThreadAwareExecutor executor;
+    //已取消的键的数量
     private int cancelledKeys;
+    // 是否需要再次选择
     private boolean needsToSelectAgain;
 
     private NioIoHandler(ThreadAwareExecutor executor, SelectorProvider selectorProvider,
@@ -140,18 +155,23 @@ public final class NioIoHandler implements IoHandler {
         }
     }
 
+    // 原生的Selector内部使用HashSet来存储被选中的SelectionKey，
+    // 而Netty使用数组实现的SelectedSelectionKeySet，这样可以减少迭代时的开销，提高性能。
+    // 解决原生 Selector 在 selectedKeys() 集合操作上的性能瓶颈
+    // 当优化失败时自动回退到标准实现
     private SelectorTuple openSelector() {
+        // 1. 创建原生 Selector
         final Selector unwrappedSelector;
         try {
             unwrappedSelector = provider.openSelector();
         } catch (IOException e) {
             throw new ChannelException("failed to open a new selector", e);
         }
-
+        // 2. 检查是否禁用优化
         if (DISABLE_KEY_SET_OPTIMIZATION) {
             return new SelectorTuple(unwrappedSelector);
         }
-
+        // 3. 使用反射检查Selector的实现类是否为sun.nio.ch.SelectorImpl（或其子类）。
         Object maybeSelectorImplClass = AccessController.doPrivileged(new PrivilegedAction<Object>() {
             @Override
             public Object run() {
@@ -169,6 +189,7 @@ public final class NioIoHandler implements IoHandler {
         if (!(maybeSelectorImplClass instanceof Class) ||
                 // ensure the current selector implementation is what we can instrument.
                 !((Class<?>) maybeSelectorImplClass).isAssignableFrom(unwrappedSelector.getClass())) {
+            // 如果不是，则返回原生Selector。
             if (maybeSelectorImplClass instanceof Throwable) {
                 Throwable t = (Throwable) maybeSelectorImplClass;
                 logger.trace("failed to instrument a special java.util.Set into: {}", unwrappedSelector, t);
@@ -177,8 +198,10 @@ public final class NioIoHandler implements IoHandler {
         }
 
         final Class<?> selectorImplClass = (Class<?>) maybeSelectorImplClass;
+        // 4. 创建一个优化的SelectedSelectionKeySet（这是Netty自定义的集合，用于替换Selector内部的两个selectedKeys集合）。
         final SelectedSelectionKeySet selectedKeySet = new SelectedSelectionKeySet();
 
+        // 5. 通过反射（或Unsafe，如果可用）将Selector内部的selectedKeys和publicSelectedKeys替换为这个优化的集合。
         Object maybeException = AccessController.doPrivileged(new PrivilegedAction<Object>() {
             @Override
             public Object run() {
@@ -229,6 +252,7 @@ public final class NioIoHandler implements IoHandler {
         }
         selectedKeys = selectedKeySet;
         logger.trace("instrumented a special java.util.Set into: {}", unwrappedSelector);
+        // 6. 如果替换成功，则返回一个包装了原生Selector和优化后的Selector的SelectorTuple；否则返回原生Selector。
         return new SelectorTuple(unwrappedSelector,
                 new SelectedSelectionKeySetSelector(unwrappedSelector, selectedKeySet));
     }
@@ -252,6 +276,9 @@ public final class NioIoHandler implements IoHandler {
         return selector().keys();
     }
 
+    /*
+    * 重新构建Selector
+    * */
     void rebuildSelector0() {
         final Selector oldSelector = selector;
         final SelectorTuple newSelectorTuple;
@@ -261,6 +288,7 @@ public final class NioIoHandler implements IoHandler {
         }
 
         try {
+            // 1. 创建新Selector
             newSelectorTuple = openSelector();
         } catch (Exception e) {
             logger.warn("Failed to create a new Selector.", e);
@@ -269,6 +297,7 @@ public final class NioIoHandler implements IoHandler {
 
         // Register all channels to the new Selector.
         int nChannels = 0;
+        // 2. 迁移所有Channel到新Selector
         for (SelectionKey key : oldSelector.keys()) {
             DefaultNioRegistration handle = (DefaultNioRegistration) key.attachment();
             try {
@@ -284,11 +313,13 @@ public final class NioIoHandler implements IoHandler {
             }
         }
 
+        // 3. 切换Selector引用
         selector = newSelectorTuple.selector;
         unwrappedSelector = newSelectorTuple.unwrappedSelector;
 
         try {
             // time to close the old selector as everything else is registered to the new one
+            // 4. 关闭旧Selector
             oldSelector.close();
         } catch (Throwable t) {
             if (logger.isWarnEnabled()) {
@@ -421,19 +452,28 @@ public final class NioIoHandler implements IoHandler {
         }
     }
 
+    /*
+    * run() 是 Netty NIO 事件循环的核心驱动方法，负责处理以下三大核心任务：
+        事件选择：通过 Selector 监听 I/O 事件
+        事件处理：执行就绪 Channel 的 I/O 操作
+        异常恢复：处理 Selector 空轮询等异常情况
+    * */
     @Override
     public int run(IoHandlerContext context) {
         int handled = 0;
         try {
             try {
+                // 1. 选择策略决策（包含超时计算）
                 switch (selectStrategy.calculateStrategy(selectNowSupplier, !context.canBlock())) {
                     case SelectStrategy.CONTINUE:
-                        return 0;
+                        return 0;// 无需阻塞立即返回
 
                     case SelectStrategy.BUSY_WAIT:
+                        // NIO 不支持忙等待
                         // fall-through to SELECT since the busy-wait is not supported with NIO
 
                     case SelectStrategy.SELECT:
+                        // 核心选择逻辑
                         select(context, wakenUp.getAndSet(false));
 
                         // 'wakenUp.compareAndSet(false, true)' is always evaluated
@@ -463,9 +503,9 @@ public final class NioIoHandler implements IoHandler {
                         // It is inefficient in that it wakes up the selector for both
                         // the first case (BAD - wake-up required) and the second case
                         // (OK - no wake-up required).
-
+                        // 2. 处理唤醒竞态条件
                         if (wakenUp.get()) {
-                            selector.wakeup();
+                            selector.wakeup();// 双重检查唤醒
                         }
                         // fall through
                     default:
@@ -473,17 +513,20 @@ public final class NioIoHandler implements IoHandler {
             } catch (IOException e) {
                 // If we receive an IOException here its because the Selector is messed up. Let's rebuild
                 // the selector and retry. https://github.com/netty/netty/issues/8566
+                // 3. Selector异常时重建
                 rebuildSelector0();
                 handleLoopException(e);
                 return 0;
             }
-
+            // 4. 处理就绪事件
             cancelledKeys = 0;
             needsToSelectAgain = false;
+            // 事件分发核心
             handled = processSelectedKeys();
         } catch (Error e) {
             throw e;
         } catch (Throwable t) {
+            // 5. 全局异常处理
             handleLoopException(t);
         }
         return handled;
@@ -501,6 +544,14 @@ public final class NioIoHandler implements IoHandler {
         }
     }
 
+    /*
+    * - 事件分发枢纽
+        处理所有就绪的 I/O 事件（OP_READ/OP_WRITE/OP_ACCEPT 等）
+        将事件分发给对应的 Channel 处理
+      -性能优化开关
+        根据 selectedKeys 状态自动选择优化/标准实现
+        优化路径比标准路径快 3-5 倍（Netty 官方基准测试）
+    * */
     private int processSelectedKeys() {
         if (selectedKeys != null) {
             return processSelectedKeysOptimized();
@@ -560,17 +611,23 @@ public final class NioIoHandler implements IoHandler {
             final SelectionKey k = selectedKeys.keys[i];
             // null out entry in the array to allow to have it GC'ed once the Channel close
             // See https://github.com/netty/netty/issues/2363
+            // 显式置空帮助 GC
             selectedKeys.keys[i] = null;
 
+            // 事件处理核心
             processSelectedKey(k);
             ++handled;
 
             if (needsToSelectAgain) {
+                // 需要重新选择
                 // null out entries in the array to allow to have it GC'ed once the Channel close
                 // See https://github.com/netty/netty/issues/2363
+                // 重置数组游标
                 selectedKeys.reset(i + 1);
 
+                // 重新执行 select
                 selectAgain();
+                // 重置循环索引
                 i = -1;
             }
         }
@@ -578,15 +635,19 @@ public final class NioIoHandler implements IoHandler {
     }
 
     private void processSelectedKey(SelectionKey k) {
+        // 1. 获取关联的注册对象（包含Channel和事件处理器）
         final DefaultNioRegistration registration = (DefaultNioRegistration) k.attachment();
+        // 2. 有效性校验（双重检查：原子标记 + SelectionKey自身状态）
         if (!registration.isValid()) {
             try {
+                // 3. 关闭失效的Channel
                 registration.handle.close();
             } catch (Exception e) {
                 logger.debug("Exception during closing " + registration.handle, e);
             }
             return;
         }
+        // 4. 事件处理核心（将就绪事件传递给Channel处理）
         registration.handle(k.readyOps());
     }
 
@@ -621,17 +682,30 @@ public final class NioIoHandler implements IoHandler {
         return unwrappedSelector;
     }
 
+    /*
+    * 通过 Selector.select(timeout) 阻塞监听 I/O 事件
+    * 动态计算超时时间（结合任务队列状态和调度任务）
+    * 检测 JDK Selector 空轮询 BUG（Linux epoll 特定版本）
+    * 通过 selectCnt 计数器触发 Selector 重建（阈值 512 次）
+    * 使用 AtomicBoolean wakenUp 原子变量管理唤醒状态
+    * 避免不必要的线程阻塞（通过 selectNow() 快速检查）
+    * 精确控制阻塞时间（纳秒级时间计算）解决 wakeup() 与 select() 的时序竞态问题
+    * */
     private void select(IoHandlerContext runner, boolean oldWakenUp) throws IOException {
         Selector selector = this.selector;
         try {
+            // 选择计数器（用于检测空轮询）
             int selectCnt = 0;
             long currentTimeNanos = System.nanoTime();
             long selectDeadLineNanos = currentTimeNanos + runner.delayNanos(currentTimeNanos);
 
             for (;;) {
+                // 1. 计算超时时间（精确到毫秒）
                 long timeoutMillis = (selectDeadLineNanos - currentTimeNanos + 500000L) / 1000000L;
+                // 2. 处理超时情况
                 if (timeoutMillis <= 0) {
                     if (selectCnt == 0) {
+                        // 首次立即返回
                         selector.selectNow();
                         selectCnt = 1;
                     }
@@ -642,15 +716,19 @@ public final class NioIoHandler implements IoHandler {
                 // Selector#wakeup. So we need to check task queue again before executing select operation.
                 // If we don't, the task might be pended until select operation was timed out.
                 // It might be pended until idle timeout if IdleStateHandler existed in pipeline.
+                // 3. 检查任务队列状态
                 if (!runner.canBlock() && wakenUp.compareAndSet(false, true)) {
                     selector.selectNow();
                     selectCnt = 1;
                     break;
                 }
 
+                // 4. 执行阻塞式选择
                 int selectedKeys = selector.select(timeoutMillis);
+                // 递增选择次数
                 selectCnt ++;
 
+                // 5. 检查终止条件
                 if (selectedKeys != 0 || oldWakenUp || wakenUp.get() || !runner.canBlock()) {
                     // - Selected something,
                     // - waken up by user, or
@@ -658,6 +736,7 @@ public final class NioIoHandler implements IoHandler {
                     // - a scheduled task is ready for processing
                     break;
                 }
+                // 6. 处理线程中断
                 if (Thread.interrupted()) {
                     // Thread was interrupted so reset selected keys and break so we not run into a busy loop.
                     // As this is most likely a bug in the handler of the user or it's client library we will
@@ -673,14 +752,17 @@ public final class NioIoHandler implements IoHandler {
                     break;
                 }
 
+                // 7. 检测空轮询（JDK BUG）
                 long time = System.nanoTime();
                 if (time - TimeUnit.MILLISECONDS.toNanos(timeoutMillis) >= currentTimeNanos) {
                     // timeoutMillis elapsed without anything selected.
+                    // 正常超时
                     selectCnt = 1;
                 } else if (SELECTOR_AUTO_REBUILD_THRESHOLD > 0 &&
                         selectCnt >= SELECTOR_AUTO_REBUILD_THRESHOLD) {
                     // The code exists in an extra method to ensure the method is not too big to inline as this
                     // branch is not very likely to get hit very frequently.
+                    // 8. 触发Selector重建
                     selector = selectRebuildSelector(selectCnt);
                     selectCnt = 1;
                     break;
@@ -689,6 +771,7 @@ public final class NioIoHandler implements IoHandler {
                 currentTimeNanos = time;
             }
 
+            // 9. 记录异常选择次数
             if (selectCnt > MIN_PREMATURE_SELECTOR_RETURNS) {
                 if (logger.isDebugEnabled()) {
                     logger.debug("Selector.select() returned prematurely {} times in a row for Selector {}.",

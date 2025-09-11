@@ -179,6 +179,7 @@ public interface ChannelHandler {
 
     /**
      * Gets called after the {@link ChannelHandler} was added to the actual context and it's ready to handle events.
+     * 在ChannelHandler被成功添加到ChannelPipeline后立即触发，且只会触发一次
      */
     void handlerAdded(ChannelHandlerContext ctx) throws Exception;
 

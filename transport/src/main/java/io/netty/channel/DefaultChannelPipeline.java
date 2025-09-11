@@ -596,6 +596,7 @@ public class DefaultChannelPipeline implements ChannelPipeline {
             firstRegistration = false;
             // We are now registered to the EventLoop. It's time to call the callbacks for the ChannelHandlers,
             // that were added before the registration was done.
+            // 触发所有已添加但未初始化的handlerAdded回调
             callHandlerAddedForAllHandlers();
         }
     }
@@ -759,15 +760,26 @@ public class DefaultChannelPipeline implements ChannelPipeline {
         return buf.toString();
     }
 
+    /*
+    * 作为入站事件的起点，会从HeadContext开始，
+    * 通过fireChannelRegistered()方法将事件沿pipeline传播给后续的ChannelInboundHandler。
+    *
+    * HeadContext → 自定义Handler1 → 自定义Handler2 → ... → TailContext
+    * */
     @Override
     public final ChannelPipeline fireChannelRegistered() {
+        // 1. 检查当前线程是否是EventLoop线程
         if (head.executor().inEventLoop()) {
+            // 2. 判断是否需要调用handler的channelRegistered方法
             if (head.invokeHandler()) {
+                // 3a. 直接调用头节点的channelRegistered处理
                 head.channelRegistered(head);
             } else {
+                // 3b. 触发事件传播
                 head.fireChannelRegistered();
             }
         } else {
+            // 4. 非EventLoop线程时提交异步任务
             head.executor().execute(this::fireChannelRegistered);
         }
         return this;
@@ -1121,6 +1133,7 @@ public class DefaultChannelPipeline implements ChannelPipeline {
         }
     }
 
+    // 遍历所有尚未处理的Handler，并触发它们的handlerAdded事件。
     private void callHandlerAddedForAllHandlers() {
         final PendingHandlerCallback pendingHandlerCallbackHead;
         synchronized (this) {

@@ -25,6 +25,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * A {@link ThreadFactory} implementation with a simple naming rule.
+ * DefaultThreadFactory 是 Netty 中用于标准化线程创建的核心工厂类，主要解决线程命名的规范化和线程属性统一配置问题。
+ * 它通过为每个线程池分配唯一的 ID 来确保线程名称的唯一性，同时提供了灵活的配置选项，如线程名称前缀、是否为守护线程、线程优先级等。
+ * 该工厂类在 Netty 中被广泛使用，特别是在需要创建多个线程池的场景中，如 NIO 事件循环组、线程池执行器等。
  */
 public class DefaultThreadFactory implements ThreadFactory {
 
@@ -90,6 +93,7 @@ public class DefaultThreadFactory implements ThreadFactory {
                     "priority: " + priority + " (expected: Thread.MIN_PRIORITY <= priority <= Thread.MAX_PRIORITY)");
         }
 
+        // 生成线程名前缀的逻辑（示例：NioEventLoop-1-）
         prefix = poolName + '-' + poolId.incrementAndGet() + '-';
         this.daemon = daemon;
         this.priority = priority;
@@ -102,12 +106,15 @@ public class DefaultThreadFactory implements ThreadFactory {
 
     @Override
     public Thread newThread(Runnable r) {
+        // 1. 创建带有规范化名称的线程
         Thread t = newThread(FastThreadLocalRunnable.wrap(r), prefix + nextId.incrementAndGet());
         try {
+            // 守护线程配置
             if (t.isDaemon() != daemon) {
                 t.setDaemon(daemon);
             }
 
+            // 线程优先级
             if (t.getPriority() != priority) {
                 t.setPriority(priority);
             }
@@ -118,6 +125,7 @@ public class DefaultThreadFactory implements ThreadFactory {
     }
 
     protected Thread newThread(Runnable r, String name) {
+        // 3. 使用Netty优化后的线程实现
         return new FastThreadLocalThread(threadGroup, r, name);
     }
 }

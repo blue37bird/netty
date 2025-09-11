@@ -70,28 +70,37 @@ public abstract class MultithreadEventExecutorGroup extends AbstractEventExecuto
      */
     protected MultithreadEventExecutorGroup(int nThreads, Executor executor,
                                             EventExecutorChooserFactory chooserFactory, Object... args) {
+        // 参数校验：线程数必须>0
         checkPositive(nThreads, "nThreads");
 
+        // 1. Executor初始化（工作线程池）
         if (executor == null) {
+            // 默认使用按任务创建线程的Executor
             executor = new ThreadPerTaskExecutor(newDefaultThreadFactory());
         }
 
+        // 2. 创建EventExecutor数组（子线程）
         children = new EventExecutor[nThreads];
 
         for (int i = 0; i < nThreads; i ++) {
             boolean success = false;
             try {
-                children[i] = newChild(executor, args);
+                // 2.1 抽象方法，由子类实现具体EventExecutor类型
+                // 2.2 每个子线程都有一个EventExecutor
+                children[i] = newChild(executor, args);// 例如NioEventLoop
                 success = true;
             } catch (Exception e) {
                 // TODO: Think about if this is a good exception type
                 throw new IllegalStateException("failed to create a child event loop", e);
             } finally {
+                // 2.2 异常回滚：关闭已创建的EventExecutor
                 if (!success) {
+                    // 关闭已创建的子线程
                     for (int j = 0; j < i; j ++) {
                         children[j].shutdownGracefully();
                     }
 
+                    // 等待所有子线程终止
                     for (int j = 0; j < i; j ++) {
                         EventExecutor e = children[j];
                         try {
@@ -108,12 +117,15 @@ public abstract class MultithreadEventExecutorGroup extends AbstractEventExecuto
             }
         }
 
+        // 3. 初始化线程选择器（负载均衡）
         chooser = chooserFactory.newChooser(children);
 
+        // 4. 终止状态监听
         final FutureListener<Object> terminationListener = new FutureListener<Object>() {
             @Override
             public void operationComplete(Future<Object> future) throws Exception {
                 if (terminatedChildren.incrementAndGet() == children.length) {
+                    // 所有子线程终止后触发
                     terminationFuture.setSuccess(null);
                 }
             }
@@ -122,7 +134,7 @@ public abstract class MultithreadEventExecutorGroup extends AbstractEventExecuto
         for (EventExecutor e: children) {
             e.terminationFuture().addListener(terminationListener);
         }
-
+        // // 5. 创建只读集合
         Set<EventExecutor> childrenSet = new LinkedHashSet<EventExecutor>(children.length);
         Collections.addAll(childrenSet, children);
         readonlyChildren = Collections.unmodifiableSet(childrenSet);

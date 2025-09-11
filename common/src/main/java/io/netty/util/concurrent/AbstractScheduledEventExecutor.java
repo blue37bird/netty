@@ -53,6 +53,11 @@ public abstract class AbstractScheduledEventExecutor extends AbstractEventExecut
         super(parent);
     }
 
+    /*
+    * Ticker是用于抽象时间源的核心接口，主要服务于定时任务的调度和执行。
+    * 统一时间获取：提供跨平台的时间基准
+    * 支持测试场景：允许在单元测试中模拟和控制时间流逝
+    * */
     @Override
     public Ticker ticker() {
         return Ticker.systemTicker();
@@ -178,11 +183,7 @@ public abstract class AbstractScheduledEventExecutor extends AbstractEventExecut
     }
 
     /**
-     * Fetch scheduled tasks from the internal queue and add these to the given {@link Queue}.
      *
-     * @param taskQueue the task queue into which the fetched scheduled tasks should be transferred.
-     * @return {@code true} if we were able to transfer everything, {@code false} if we need to call this method again
-     *         as soon as there is space again in {@code taskQueue}.
      * 负责将到期的定时任务从专用队列转移到主任务队列
      */
     protected boolean fetchFromScheduledTaskQueue(Queue<Runnable> taskQueue) {

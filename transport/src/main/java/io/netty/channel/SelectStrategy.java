@@ -24,19 +24,21 @@ import io.netty.util.IntSupplier;
  * operation can be delayed or skipped entirely if there are events to process immediately.
  */
 public interface SelectStrategy {
+    // SelectStrategy用于控制事件循环中的select行为，比如是否阻塞等待、
+    // 立即返回或者进行忙等待。这有助于优化性能，特别是在不同负载情况下调整select策略，避免不必要的阻塞或CPU空转。
 
     /**
      * Indicates a blocking select should follow.
      */
-    int SELECT = -1;
+    int SELECT = -1;// 执行阻塞式select
     /**
      * Indicates the IO loop should be retried, no blocking select to follow directly.
      */
-    int CONTINUE = -2;
+    int CONTINUE = -2;// 跳过select立即继续循环
     /**
      * Indicates the IO loop to poll for new events without blocking.
      */
-    int BUSY_WAIT = -3;
+    int BUSY_WAIT = -3;// 非阻塞忙等待模式
 
     /**
      * The {@link SelectStrategy} can be used to steer the outcome of a potential select
